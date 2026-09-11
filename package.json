@@ -1,0 +1,25 @@
+{
+  "name": "hvac-missed-call-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Missed-call text-back and Google review request/reply automation for HVAC/plumbing companies, built on Twilio and the Anthropic API.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test test/**/*.test.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.124.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "pg": "^8.23.0",
+    "twilio": "^6.1.0"
+  },
+  "devDependencies": {
+    "supertest": "^7.2.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
