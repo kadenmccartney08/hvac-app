@@ -1,5 +1,6 @@
 const express = require('express');
 
+const voiceRoute = require('./routes/voice');
 const callStatusRoute = require('./routes/callStatus');
 const smsRoute = require('./routes/sms');
 const reviewsRoute = require('./routes/reviews');
@@ -10,6 +11,7 @@ const app = express();
 app.get('/health', (req, res) => res.json({ ok: true }));
 
 // Twilio webhooks
+app.use('/webhooks/twilio/voice', voiceRoute);
 app.use('/webhooks/twilio/call-status', callStatusRoute);
 app.use('/webhooks/twilio/sms', smsRoute);
 

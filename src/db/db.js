@@ -31,6 +31,10 @@ async function initDb() {
     );
   `);
 
+  // Added after the initial launch — ADD COLUMN IF NOT EXISTS keeps this
+  // migration-safe for a database that already has the businesses table.
+  await query(`ALTER TABLE businesses ADD COLUMN IF NOT EXISTS forward_to_number TEXT;`);
+
   await query(`
     CREATE TABLE IF NOT EXISTS calls (
       id SERIAL PRIMARY KEY,
@@ -104,12 +108,12 @@ async function initDb() {
 
 // --- businesses ---
 
-async function createBusiness({ name, twilioPhoneNumber, googleReviewLink, timezone }) {
+async function createBusiness({ name, twilioPhoneNumber, googleReviewLink, timezone, forwardToNumber }) {
   const { rows } = await query(
-    `INSERT INTO businesses (name, twilio_phone_number, google_review_link, timezone)
-     VALUES ($1, $2, $3, COALESCE($4, 'America/Chicago'))
+    `INSERT INTO businesses (name, twilio_phone_number, google_review_link, timezone, forward_to_number)
+     VALUES ($1, $2, $3, COALESCE($4, 'America/Chicago'), $5)
      RETURNING *`,
-    [name, twilioPhoneNumber, googleReviewLink || null, timezone || null]
+    [name, twilioPhoneNumber, googleReviewLink || null, timezone || null, forwardToNumber || null]
   );
   return rows[0];
 }
@@ -127,6 +131,33 @@ async function getBusinessById(id) {
 async function listBusinesses() {
   const { rows } = await query(`SELECT * FROM businesses ORDER BY created_at DESC`);
   return rows;
+}
+
+/** Partial update — only the fields passed in `fields` are changed. */
+async function updateBusiness(id, fields) {
+  const columns = {
+    name: 'name',
+    twilioPhoneNumber: 'twilio_phone_number',
+    googleReviewLink: 'google_review_link',
+    timezone: 'timezone',
+    forwardToNumber: 'forward_to_number',
+  };
+
+  const sets = [];
+  const values = [];
+  for (const [key, column] of Object.entries(columns)) {
+    if (fields[key] === undefined) continue;
+    values.push(fields[key]);
+    sets.push(`${column} = $${values.length}`);
+  }
+  if (sets.length === 0) return getBusinessById(id);
+
+  values.push(id);
+  const { rows } = await query(
+    `UPDATE businesses SET ${sets.join(', ')} WHERE id = $${values.length} RETURNING *`,
+    values
+  );
+  return rows[0] || null;
 }
 
 // --- calls ---
@@ -235,6 +266,7 @@ module.exports = {
   getBusinessByTwilioNumber,
   getBusinessById,
   listBusinesses,
+  updateBusiness,
   insertCall,
   insertMessage,
   insertCallbackRequest,

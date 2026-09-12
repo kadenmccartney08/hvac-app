@@ -83,7 +83,10 @@ restart the server (signature validation checks the *exact* URL Twilio signed ag
 
 ## 2. Register a business
 
-Each Twilio number maps to one business. Create one via the API:
+Each Twilio number maps to one business. `forwardToNumber` is the real phone that should ring
+when a customer calls that Twilio number (the business's cell, office line, etc.) — set it and
+the app generates the call-forwarding TwiML itself, so there's no TwiML Bin to hand-create per
+client. Create a business via the API:
 
 ```bash
 curl -X POST http://localhost:3000/api/businesses \
@@ -91,50 +94,54 @@ curl -X POST http://localhost:3000/api/businesses \
   -d '{
     "name": "Acme HVAC",
     "twilioPhoneNumber": "+15555550123",
+    "forwardToNumber": "+15555559999",
     "googleReviewLink": "https://g.page/r/xxxxxxxxxxxx/review",
     "timezone": "America/Chicago"
   }'
 ```
 
 `twilioPhoneNumber` must exactly match (E.164 format) the Twilio number you configure the
-webhooks on below.
+webhooks on below. `forwardToNumber` and `googleReviewLink` are optional — update either later
+with:
+
+```bash
+curl -X PATCH http://localhost:3000/api/businesses/1 \
+  -H "Content-Type: application/json" \
+  -d '{"forwardToNumber": "+15555559999"}'
+```
 
 ## 3. Configure Twilio
 
 ### Voice — forwarding calls and detecting a missed call
 
-If nothing answers the inbound call at all (no TwiML, no forwarding configured), Twilio's own
-call status becomes `no-answer` on its own, and the plain **Call status changes** webhook
-(below) is all you need. In practice you almost always want the call to actually ring the
-business's real phone first — for that, use a TwiML Bin with `<Dial>`, because once *anything*
-answers the inbound leg (which happens automatically the instant Twilio runs TwiML), the
-parent call's own status becomes `completed` regardless of whether the forwarded leg was
-picked up. The real answered/missed outcome instead comes through as `DialCallStatus` on the
-`<Dial>`'s `action` callback — this app checks `DialCallStatus` first and falls back to
-`CallStatus` when it's absent, so pointing both at the same URL works correctly either way.
+Point the number straight at this app — no TwiML Bin needed:
 
-**To forward calls and detect missed ones:**
+1. Twilio Console → your phone number → **Voice configuration**
+2. **"A call comes in"** / primary method → **Use Webhooks**, URL:
+   `https://YOUR_PUBLIC_BASE_URL/webhooks/twilio/voice`, method `POST`
+3. **Call status changes** (same page) →
+   `https://YOUR_PUBLIC_BASE_URL/webhooks/twilio/call-status`, method `POST`
 
-1. Twilio Console → **Voice → TwiML Bins → Create new TwiML Bin**. Body:
-   ```xml
-   <?xml version="1.0" encoding="UTF-8"?>
-   <Response>
-     <Dial timeout="20" action="https://YOUR_PUBLIC_BASE_URL/webhooks/twilio/call-status" method="POST">
-       +1XXXXXXXXXX
-     </Dial>
-   </Response>
-   ```
-   Replace `+1XXXXXXXXXX` with the real phone that should ring (the business's cell, etc.).
-2. Copy the TwiML Bin's own hosted URL (something like
-   `https://handler.twilio.com/twiml/EHxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`).
-3. On your phone number's **Voice configuration**, set **"A call comes in"** /
-   **primary method's webhook URL** to that Bin URL (`Use Webhooks`, method `POST`).
-4. Also set **Call status changes** on the same page to
-   `https://YOUR_PUBLIC_BASE_URL/webhooks/twilio/call-status`, method `POST` — this covers the
-   case where the call never gets forwarded at all.
+`/webhooks/twilio/voice` looks up the business by the number that was called, and returns a
+`<Dial timeout="12">` TwiML pointed at that business's `forwardToNumber`, with its `action`
+callback pointed at `/webhooks/twilio/call-status` — which is what actually detects the missed
+call. It's set up this way (rather than just checking the parent call's own status) because
+once *anything* answers the inbound leg — which happens automatically the instant Twilio runs
+any TwiML — the parent call's own status becomes `completed` regardless of whether the
+forwarded leg was ever picked up. The real answered/missed outcome instead comes through as
+`DialCallStatus` on the `<Dial>`'s `action` callback, which `/webhooks/twilio/call-status`
+checks first, falling back to plain `CallStatus` when `DialCallStatus` is absent (e.g. if a
+business has no `forwardToNumber` set, `/webhooks/twilio/voice` returns `<Reject/>` instead of
+dialing anywhere, and the call's own status becomes the missed-call signal instead).
 
-If you'd rather not forward calls anywhere yet, leave "A call comes in" unconfigured and just
-set **Call status changes** — every call will show as missed, which is fine for testing.
+The `timeout="12"` matters more than it looks: carrier voicemail can pick up a call before a
+longer Dial timeout gives up, which makes Twilio see the call as answered (by voicemail) rather
+than missed. 12 seconds is short enough to reliably beat voicemail on most carriers while still
+giving a real person a few rings to answer — adjust in `src/routes/voice.js` if needed.
+
+If a business has no `forwardToNumber` configured, every call to their number is treated as
+missed (nothing to actually answer it), which is a fine way to test end-to-end before you have
+a real forwarding number to use.
 
 ### Messaging — inbound SMS
 
@@ -159,6 +166,24 @@ This is how the flow works end to end:
 3. Customer replies with a number (e.g. `2`) → Twilio posts to `/webhooks/twilio/sms`.
 4. The server matches the reply to a slot, confirms it, and texts back a confirmation with a
    "Add to Google Calendar" link (no calendar auth needed — it's a prefilled Calendar URL).
+
+### Onboarding a new client — the full checklist
+
+What you need from them: their business name, a real phone number to forward calls to, and
+(optionally, for review-request texts) their Google review link.
+
+1. Buy them a Twilio phone number (Voice + SMS capable).
+2. Register them: `POST /api/businesses` with `name`, `twilioPhoneNumber`, `forwardToNumber`,
+   and `googleReviewLink` if you have it (step 2 above).
+3. On that number's Voice configuration: "A call comes in" → `/webhooks/twilio/voice`,
+   "Call status changes" → `/webhooks/twilio/call-status` (step 3 above — no TwiML Bin needed).
+4. Add the number to a Messaging Service with its inbound webhook set to
+   `/webhooks/twilio/sms` (or set it directly on the number if it's not in a service — see
+   above).
+5. Test: call their number from another phone, let it ring out unanswered, confirm a text
+   comes back.
+
+That's it — no manual TwiML Bin per client, no code changes needed for a new customer.
 
 ## 4. Review requests & reply drafts
 
