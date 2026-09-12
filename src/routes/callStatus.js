@@ -25,9 +25,14 @@ router.post('/', express.urlencoded({ extended: false }), async (req, res) => {
     return res.status(403).send('Invalid Twilio signature');
   }
 
-  // Ack immediately — Twilio doesn't wait on this endpoint, and everything
-  // below (DB writes, an LLM call, an SMS send) shouldn't hold up the response.
-  res.sendStatus(200);
+  // Ack immediately with valid (empty) TwiML — everything below (DB writes,
+  // an LLM call, an SMS send) shouldn't hold up the response. This URL also
+  // serves as the <Dial> action callback, where Twilio expects a real TwiML
+  // document to continue the still-connected caller's call; a bodyless 200
+  // isn't valid TwiML and causes Twilio to play "an application error has
+  // occurred" to the caller. An empty <Response/> just ends the call quietly.
+  res.set('Content-Type', 'text/xml');
+  res.status(200).send('<Response></Response>');
 
   const { CallSid, From, To, CallStatus, DialCallStatus } = req.body;
   const effectiveStatus = DialCallStatus || CallStatus;
