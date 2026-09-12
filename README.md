@@ -101,16 +101,54 @@ webhooks on below.
 
 ## 3. Configure Twilio
 
-In the [Twilio Console](https://console.twilio.com/), open your phone number's configuration:
+### Voice — forwarding calls and detecting a missed call
 
-- **Voice → A call comes in**: however you already handle incoming calls (forward to the
-  business's cell, a ring group, etc.).
-- **Voice → Call status changes** (or the `statusCallback` param on your `<Dial>`/incoming
-  call TwiML): set to
-  `https://YOUR_PUBLIC_BASE_URL/webhooks/twilio/call-status`, method `POST`, and make sure
-  the status callback events include at least `completed`, `no-answer`, `busy`, `failed`.
-- **Messaging → A message comes in**: set to
+If nothing answers the inbound call at all (no TwiML, no forwarding configured), Twilio's own
+call status becomes `no-answer` on its own, and the plain **Call status changes** webhook
+(below) is all you need. In practice you almost always want the call to actually ring the
+business's real phone first — for that, use a TwiML Bin with `<Dial>`, because once *anything*
+answers the inbound leg (which happens automatically the instant Twilio runs TwiML), the
+parent call's own status becomes `completed` regardless of whether the forwarded leg was
+picked up. The real answered/missed outcome instead comes through as `DialCallStatus` on the
+`<Dial>`'s `action` callback — this app checks `DialCallStatus` first and falls back to
+`CallStatus` when it's absent, so pointing both at the same URL works correctly either way.
+
+**To forward calls and detect missed ones:**
+
+1. Twilio Console → **Voice → TwiML Bins → Create new TwiML Bin**. Body:
+   ```xml
+   <?xml version="1.0" encoding="UTF-8"?>
+   <Response>
+     <Dial timeout="20" action="https://YOUR_PUBLIC_BASE_URL/webhooks/twilio/call-status" method="POST">
+       +1XXXXXXXXXX
+     </Dial>
+   </Response>
+   ```
+   Replace `+1XXXXXXXXXX` with the real phone that should ring (the business's cell, etc.).
+2. Copy the TwiML Bin's own hosted URL (something like
+   `https://handler.twilio.com/twiml/EHxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`).
+3. On your phone number's **Voice configuration**, set **"A call comes in"** /
+   **primary method's webhook URL** to that Bin URL (`Use Webhooks`, method `POST`).
+4. Also set **Call status changes** on the same page to
+   `https://YOUR_PUBLIC_BASE_URL/webhooks/twilio/call-status`, method `POST` — this covers the
+   case where the call never gets forwarded at all.
+
+If you'd rather not forward calls anywhere yet, leave "A call comes in" unconfigured and just
+set **Call status changes** — every call will show as missed, which is fine for testing.
+
+### Messaging — inbound SMS
+
+If your number is part of a Messaging Service (Twilio adds this automatically for A2P 10DLC
+compliance in the US), the number's own messaging webhook is overridden by the service's
+settings. Configure it there instead:
+
+- **Messaging → Services → (your service) → Settings** tab → under **Inbound messages**,
+  select **"Send a webhook"** and set the Request URL to
   `https://YOUR_PUBLIC_BASE_URL/webhooks/twilio/sms`, method `POST`.
+
+If the number isn't in a Messaging Service, set the webhook directly on the number instead:
+**Numbers & senders → your number → Messaging configuration → "A message comes in"** →
+same URL, method `POST`.
 
 This is how the flow works end to end:
 

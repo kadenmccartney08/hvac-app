@@ -7,10 +7,18 @@ const anthropicService = require('../services/anthropic');
 const scheduling = require('../services/scheduling');
 
 /**
- * Twilio Voice status callback webhook.
- * Configure this as the "Call Status Changes" webhook on your Twilio number
- * (or as the statusCallback on your <Dial>/incoming call handling), listening
- * for at least: completed, no-answer, busy, failed, canceled.
+ * Twilio Voice webhook. This URL serves two roles, both pointed here:
+ *
+ * 1. As the plain "Call status changes" webhook — fires with just CallStatus
+ *    for the parent (inbound) call. If nothing ever answers the call at all
+ *    (no <Dial>/TwiML configured), CallStatus itself becomes "no-answer".
+ *
+ * 2. As the `action` callback on a <Dial> that forwards the call to the
+ *    business's real phone (see README for the TwiML Bin setup). In that
+ *    case CallStatus on the parent call is usually "completed" (Twilio
+ *    itself answered to run the TwiML) even if nobody picked up the
+ *    forwarded leg — the real answer/no-answer outcome comes through as
+ *    DialCallStatus instead, so we prefer that field when it's present.
  */
 router.post('/', express.urlencoded({ extended: false }), async (req, res) => {
   if (!twilioService.validateTwilioRequest(req)) {
@@ -21,7 +29,8 @@ router.post('/', express.urlencoded({ extended: false }), async (req, res) => {
   // below (DB writes, an LLM call, an SMS send) shouldn't hold up the response.
   res.sendStatus(200);
 
-  const { CallSid, From, To, CallStatus } = req.body;
+  const { CallSid, From, To, CallStatus, DialCallStatus } = req.body;
+  const effectiveStatus = DialCallStatus || CallStatus;
 
   try {
     const business = await db.getBusinessByTwilioNumber(To);
@@ -30,13 +39,13 @@ router.post('/', express.urlencoded({ extended: false }), async (req, res) => {
       return;
     }
 
-    const missed = twilioService.isMissedCallStatus(CallStatus);
+    const missed = twilioService.isMissedCallStatus(effectiveStatus);
     const call = await db.insertCall({
       businessId: business.id,
       callSid: CallSid,
       from: From,
       to: To,
-      status: CallStatus,
+      status: effectiveStatus,
       missed,
     });
 
